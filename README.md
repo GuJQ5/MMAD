@@ -1,7 +1,4 @@
 ------------------------------------------------------------------------
-
-editor_options: markdown: wrap: 72 ---
-
 # MMAD
 
 **Minorization-Maximization via Assembly-Decomposition Technology**
@@ -12,7 +9,7 @@ editor_options: markdown: wrap: 72 ---
 
 ``` r
 # install.packages("devtools")
-devtools::install_github("<user>/MMAD")
+devtools::install_github("GuJQ5/MMAD")
 ```
 
 ## Quick start

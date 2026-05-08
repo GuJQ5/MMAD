@@ -1,0 +1,16 @@
+test_that("MMAD works", {
+  Function_obj<-list()
+  Function_obj$dimension<-2
+  Function_obj$components<-list()
+  Function_obj$components[[1]]<-list(coefficient=c(1/2,1/2),parameter= c(-1,-2),functions="Logarithmic")
+  Function_obj$components[[2]]<-list(coefficient= c(2/3,1/3),parameter= c(-1,-2),functions="Logarithmic")
+  Function_obj$components[[3]]<-list(coefficient= c(1/3,2/3),parameter=c(-1,-2),functions="Logarithmic")
+  Function_obj$components[[4]]<-list(coefficient=c(12,15,9,-6,-6),parameter=c(1,2,3,-1,-2),functions="Linear_combination")
+
+  solution<-MMAD(Function_obj,init=c(4,2))
+  VV<-Function_evaluation(Function_obj,input=solution)
+
+  expect_type(solution,"double")
+  expect_length(solution,2)
+  expect_lt(mean(abs(VV$Gradient)),1e-6)
+})

@@ -1,0 +1,502 @@
+## Assembly Functions
+{
+  #### Original function
+  {
+    Power<-function(parameter,coefficient)
+    {
+      return(sum(parameter*coefficient[-length(coefficient)])^coefficient[length(coefficient)])
+    }
+    
+    Logarithmic<-function(parameter,coefficient)
+    {
+      return(log(sum(coefficient*parameter)))
+    }
+    
+    Logarithmic_one_minus<-function(parameter,coefficient)
+    {
+      return(log(1-sum(coefficient*parameter)))
+    }
+    
+    Exponential<-function(parameter,coefficient)
+    {
+      return(exp(sum(coefficient*parameter)))
+    }
+    
+    Linear_combination<-function(parameter,coefficient)
+    {
+      return(sum(coefficient*parameter))
+    }
+  }
+  
+  #### Gradient
+  {
+    Gradient_Power<-function(parameter,coefficient)
+    {
+      return(sum(parameter*coefficient[-length(coefficient)])^(coefficient[length(coefficient)]-1)*coefficient[length(coefficient)]*coefficient[-length(coefficient)])
+    }
+    
+    Gradient_Logarithmic<-function(parameter,coefficient)
+    {
+      return(coefficient/(sum(coefficient*parameter)))
+    }
+    
+    Gradient_Logarithmic_one_minus<-function(parameter,coefficient)
+    {
+      return(-coefficient/(1-sum(coefficient*parameter)))
+    }
+    
+    Gradient_Exponential<-function(parameter,coefficient)
+    {
+      return(coefficient*exp(sum(coefficient*parameter)))
+    }
+    
+    Gradient_Linear_combination<-function(parameter,coefficient)
+    {
+      return(coefficient)
+    }
+  }
+  
+  #### Hessian
+  {
+    Hessian_Power<-function(parameter,coefficient)
+    {
+      return(sum(parameter*coefficient[-length(coefficient)])^(coefficient[length(coefficient)]-2)*(coefficient[length(coefficient)]-1)*coefficient[length(coefficient)]*(coefficient[-length(coefficient)]%*%t(coefficient[-length(coefficient)])))
+    }
+    
+    Hessian_Logarithmic<-function(parameter,coefficient)
+    {
+      return(-coefficient%*%t(coefficient)/(sum(coefficient*parameter))^2)
+    }
+    
+    Hessian_Logarithmic_one_minus<-function(parameter,coefficient)
+    {
+      return(-coefficient%*%t(coefficient)/(1-sum(coefficient*parameter))^2)
+    }
+    
+    Hessian_Exponential<-function(parameter,coefficient)
+    {
+      return(coefficient%*%t(coefficient)*exp(sum(coefficient*parameter)))
+    }
+    
+    Hessian_Linear_combination<-function(parameter,coefficient)
+    {
+      return(coefficient%*%t(coefficient)*0)
+    }
+  }
+}
+
+## Function Construction
+{
+  is_natural_number <- function(x, tol = .Machine$double.eps^0.5) 
+  {
+    is.numeric(x) && x > 0 && abs(x - round(x)) < tol
+  }
+  
+  Function_construction<-function()
+  {
+    print("What is the total number of parameters?")
+    p<-as.numeric(readline())
+    while(!is_natural_number(p))
+    {
+      print("Please input positive interger.")
+      p<-as.numeric(readline())
+    }
+    
+    Function_obj<-list()
+    Function_obj$dimension<-p
+    Function_obj$components<-list()
+    continue_indicator<-TRUE
+    add_position<-0
+    all_components<-c("Power","Logarithmic","Logarithmic_one_minus","Exponential","Linear_combination")
+    while(continue_indicator)
+    {
+      add_position<-add_position+1
+      choices <- c("Power of linear combination: (ax+by)^c","Logarithm of linear combination: log(ax+by)","Logarithm of 1 minus linear combination: log(1-ax-by)","Exponential of linear combination: exp(ax+by)","Linear combination: ax+by")
+      selection <- menu(choices, title = paste0("Please select the function type of No.",add_position," component:"))
+      function_selected<-all_components[selection]
+      
+      print(paste0("Please input the vector of indexes of parameters or existing functions (interger between -",p," and ",add_position-1,") in the linear combination."))
+      input <- readline()
+      para <- eval(parse(text=input))
+      while(prod(para%in%((-p):(add_position-1)))==0)
+      {
+        print(paste0("Please input the vector of interger between -",p," and ",add_position-1,"."))
+        input <- readline()
+        para <- eval(parse(text=input))
+      }
+      target_length<-length(para)
+      
+      if(function_selected=="positive_power")
+      {
+        print(paste0("Please input the vector of coefficients of the linear combination and the power coefficient."))
+        target_length<-length(para)+1
+      }else
+      {
+        print(paste0("Please input the vector of coefficients of the linear combination."))
+      }
+      input <- readline()
+      coeff <- eval(parse(text=input))
+      while(any(is.na(coeff))||(length(coeff)!=target_length))
+      {
+        print(paste0("Please input ",target_length," numeric coefficients."))
+        input <- readline()
+        coeff <- eval(parse(text=input))
+      }
+      Function_obj$components[[add_position]]<-list(coefficient=coeff,parameter=para,functions=function_selected)
+      selection <- menu(c("Yes","No"), title = paste0("Continue?"))
+      continue_indicator<-c(TRUE,FALSE)[selection]
+    }
+    return(Function_obj)
+  }
+}
+
+## Function Evaluation
+{
+  Function_evaluation<-function(Function_obj,input)
+  {
+    if(length(input)!=Function_obj$dimension)
+    {
+      print("Dimension mismatch!")
+    }
+    else
+    {
+      p<-length(input)
+      value_output<-rep(0,length(Function_obj$components))
+      gradient_output<-matrix(0,length(Function_obj$components),p)
+      Hessian_output<-matrix(0,length(Function_obj$components)*p,p)
+      for(i in 1:length(Function_obj$components))
+      {
+        ## Put value in the function argument
+        update_parameter<-rep(NA,length(Function_obj$components[[i]]$parameter))
+        
+        zero_which<-which(Function_obj$components[[i]]$parameter==0)
+        neg<-which(Function_obj$components[[i]]$parameter<0)
+        neg_value<--Function_obj$components[[i]]$parameter[neg]
+        pos<-which(Function_obj$components[[i]]$parameter>0)
+        pos_value<-Function_obj$components[[i]]$parameter[pos]
+        
+        update_parameter[neg]<-input[neg_value]
+        update_parameter[pos]<-value_output[pos_value]
+        update_parameter[zero_which]<-1
+        
+        ## Compute the value
+        value_output[i]<-get(Function_obj$components[[i]]$functions)(coefficient = Function_obj$components[[i]]$coefficient,parameter = update_parameter)
+        ## Compute the gradient
+        update_gradient<-matrix(0,length(Function_obj$components[[i]]$parameter),p)
+        update_gradient[neg,]<-(matrix(rep(1:p,each=length(neg)),ncol=p)==neg_value)
+        update_gradient[pos,]<-gradient_output[pos_value,]
+        gradient_mid<-get(paste0("Gradient_",Function_obj$components[[i]]$functions))(coefficient = Function_obj$components[[i]]$coefficient,parameter = update_parameter)
+        gradient_output[i,]<-colSums(update_gradient*gradient_mid)
+        ## Compute the Hessian
+        Hessian_output[(i-1)*p+1:p,]<-t(update_gradient)%*%(get(paste0("Hessian_",Function_obj$components[[i]]$functions))(coefficient = Function_obj$components[[i]]$coefficient,parameter = update_parameter))%*%update_gradient
+        if(length(pos_value)>0)
+        {
+          for(j in 1:length(pos_value))
+          {
+            Hessian_output[(i-1)*p+1:p,]<-gradient_mid[pos[j]]*Hessian_output[(pos_value[j]-1)*p+1:p,]+Hessian_output[(i-1)*p+1:p,]
+          }
+        }
+      }
+      return(list(Value=value_output[i],Gradient=gradient_output[i,],Hessian=Hessian_output[(i-1)*p+1:p,]))
+    }
+  }
+}
+
+## Function Minorization
+{
+  convexity<-function(Function_name,coefficient)
+  {
+    convexity_list<-c("Power","Exponential")
+    concavity_list<-c("Logarithmic")
+    special_list<-"Logarithmic_one_minus"
+    identity_list<-c("Linear_combination")
+    
+    if(Function_name%in%convexity_list)
+    {
+      property<-1+(coefficient<0)
+    }
+    if(Function_name%in%concavity_list)
+    {
+      property<-2-(coefficient<0)
+    }
+    if(Function_name%in%identity_list)
+    {
+      property<-0
+    }
+    if(Function_name%in%special_list)
+    {
+      property<-2+(coefficient<0)
+    }
+    return(property) # 0: linear; 1: convex; 2: concave; 3: -log(1-x).
+  }
+  
+  Function_minorization<-function(Function_obj,input)
+  {
+    if(length(input)!=Function_obj$dimension)
+    {
+      print("Dimension mismatch!")
+    }
+    else
+    {
+      p<-length(input)
+      mid_value<-rep(0,length(Function_obj$components))
+      for(i in 1:length(Function_obj$components))
+      {
+        ## Put value in the function argument
+        update_parameter<-rep(NA,length(Function_obj$components[[i]]$parameter))
+        
+        zero_which<-which(Function_obj$components[[i]]$parameter==0)
+        neg<-which(Function_obj$components[[i]]$parameter<0)
+        neg_value<--Function_obj$components[[i]]$parameter[neg]
+        pos<-which(Function_obj$components[[i]]$parameter>0)
+        pos_value<-Function_obj$components[[i]]$parameter[pos]
+        
+        update_parameter[neg]<-input[neg_value]
+        update_parameter[pos]<-mid_value[pos_value]
+        update_parameter[zero_which]<-1
+        
+        ## Compute the value
+        mid_value[i]<-get(Function_obj$components[[i]]$functions)(coefficient = Function_obj$components[[i]]$coefficient,parameter = update_parameter)
+      }
+      
+      Surrogate_function_mid<-list()
+      Surrogate_function_final<-list()
+      Surrogate_function_final_coefficient<-list()
+      for(i in 1:Function_obj$dimension)
+      {
+        Surrogate_function_final[[i]]<-list()
+        Surrogate_function_final[[i]]$dimension<-1
+        Surrogate_function_final[[i]]$components<-list()
+        Surrogate_function_final_coefficient[[i]]<-list(coefficient=NULL,parameter=NULL,functions="Linear_combination")
+      }
+      Surrogate_constant<-0
+      
+      coefficients<-1
+      Surrogate_function_mid[[1]]<-Function_obj$components[[length(Function_obj$components)]]
+      
+      while (length(Surrogate_function_mid)>0) 
+      {
+        Function_component<-Surrogate_function_mid[[1]]
+        if((length(Function_component$parameter)==1)&(Function_component$parameter[1]<0))
+        {
+          ii<--Function_component$parameter
+          
+          add_position<-length(Surrogate_function_final[[ii]]$components)+1
+          add_function<-list(coefficient=Function_component$coefficient,parameter=-1,functions=Function_component$functions)
+          Surrogate_function_final[[ii]]$components[[add_position]]<-add_function
+          Surrogate_function_final_coefficient[[ii]]$coefficient<-c(Surrogate_function_final_coefficient[[ii]]$coefficient,coefficients[1])
+          Surrogate_function_final_coefficient[[ii]]$parameter<-c(Surrogate_function_final_coefficient[[ii]]$parameter,add_position)
+        }
+        else
+        {
+          convexity_indicator<-convexity(Function_component$functions,coefficients[1])
+          if((Function_component$functions=="Power")&(abs(Function_component$coefficient[length(Function_component$coefficient)]-1/2)<1/2))
+          {
+            convexity_indicator<-3-convexity_indicator
+          }
+          
+          if(convexity_indicator==0)
+          {
+            for(j in 1:length(Function_component$parameter))
+            {
+              if(Function_component$parameter[j]<0)
+              {
+                ii<--Function_component$parameter[j]
+                Surrogate_function_final_coefficient[[ii]]$coefficient<-c(Surrogate_function_final_coefficient[[ii]]$coefficient,coefficients[1]*Function_component$coefficient[j])
+                Surrogate_function_final_coefficient[[ii]]$parameter<-c(Surrogate_function_final_coefficient[[ii]]$parameter,-1)
+              }
+              if(Function_component$parameter[j]==0)
+              {
+                Surrogate_constant<-Surrogate_constant+coefficients[1]*Function_component$coefficient[j]
+              }
+              if(Function_component$parameter[j]>0)
+              {
+                Surrogate_function_mid[[length(Surrogate_function_mid)+1]]<-Function_obj$components[[Function_component$parameter[j]]]
+                coefficients<-c(coefficients,coefficients[1]*Function_component$coefficient[j])
+              }
+            }
+          }
+          if(convexity_indicator==1)
+          {
+            update_parameter<-rep(1,length(Function_component$parameter))
+            update_parameter[Function_component$parameter<0]<-input[-Function_component$parameter[Function_component$parameter<0]]
+            update_parameter[Function_component$parameter>0]<-mid_value[Function_component$parameter[Function_component$parameter>0]]
+            GG<-get(paste0("Gradient_",Function_component$functions))(coefficient = Function_component$coefficient,parameter = update_parameter)
+            VV<-get(Function_component$functions)(coefficient = Function_component$coefficient,parameter = update_parameter)
+            Surrogate_constant<-Surrogate_constant+coefficients[1]*(VV-sum(GG*update_parameter))
+            power_indicator<-(Function_component$functions=="Power")
+            for(j in 1:length(Function_component$parameter))
+            {
+              if(Function_component$parameter[j]==0)
+              {
+                Surrogate_constant<-Surrogate_constant+coefficients[1]*GG[j]*update_parameter[j]
+              }
+              if(Function_component$parameter[j]<0)
+              {
+                ii<--Function_component$parameter[j]
+                
+                Surrogate_function_final_coefficient[[ii]]$coefficient<-c(Surrogate_function_final_coefficient[[ii]]$coefficient,coefficients[1]*GG[j])
+                Surrogate_function_final_coefficient[[ii]]$parameter<-c(Surrogate_function_final_coefficient[[ii]]$parameter,-1)
+              }
+              if(Function_component$parameter[j]>0)
+              {
+                Surrogate_function_mid[[length(Surrogate_function_mid)+1]]<-Function_obj$components[[Function_component$parameter[j]]]
+                coefficients<-c(coefficients,coefficients[1]*GG[j])
+              }
+            }
+          }
+          if(convexity_indicator==2)
+          {
+            update_parameter<-rep(1,length(Function_component$parameter))
+            update_parameter[Function_component$parameter<0]<-input[-Function_component$parameter[Function_component$parameter<0]]
+            update_parameter[Function_component$parameter>0]<-mid_value[Function_component$parameter[Function_component$parameter>0]]
+            linear_component<-update_parameter*Function_component$coefficient[1:length(update_parameter)]
+            linear_sum<-sum(linear_component)
+            power_indicator<-(Function_component$functions=="Power")
+            for(j in 1:length(Function_component$parameter))
+            {
+              if(Function_component$parameter[j]==0)
+              {
+                Surrogate_constant<-Surrogate_constant+coefficients[1]*linear_component[j]/linear_sum*get(Function_component$functions)(coefficient = linear_sum,parameter = 1)
+              }
+              if(Function_component$parameter[j]<0)
+              {
+                ii<--Function_component$parameter[j]
+                
+                add_position<-length(Surrogate_function_final[[ii]]$components)+1
+                add_function<-list(coefficient=Function_component$coefficient[j]*linear_sum/linear_component[j],parameter=-1,functions=Function_component$functions)
+                if(power_indicator)
+                {
+                  add_function$coefficient<-c(add_function$coefficient,Function_component$coefficient[length(Function_component$coefficient)])
+                }
+                
+                Surrogate_function_final[[ii]]$components[[add_position]]<-add_function
+                
+                Surrogate_function_final_coefficient[[ii]]$coefficient<-c(Surrogate_function_final_coefficient[[ii]]$coefficient,coefficients[1]*linear_component[j]/linear_sum)
+                Surrogate_function_final_coefficient[[ii]]$parameter<-c(Surrogate_function_final_coefficient[[ii]]$parameter,add_position)
+              }
+              ###### Check point
+              if(Function_component$parameter[j]>0)
+              {
+                outer_function<-Function_component$functions
+                internal_function<-Function_obj$components[[Function_component$parameter[j]]]
+                
+                coefficient_general<-coefficients[1]*linear_component[j]/linear_sum
+                coefficient_out<-Function_component$coefficient[j]*linear_sum/linear_component[j]
+                coefficient_in<-internal_function$coefficient
+                
+                parameter_in<-internal_function$parameter
+                
+                if(outer_function=="Logarithmic")
+                {
+                  if(internal_function$functions=="Power")
+                  {
+                    add_function<-list(coefficient=coefficient_in[-length(coefficient_in)],parameter=internal_function$parameter,functions="Logarithmic")
+                    Surrogate_function_mid[[length(Surrogate_function_mid)+1]]<-add_function
+                    coefficients<-c(coefficients,coefficient_general*coefficient_in[length(coefficient_in)])
+                    Surrogate_constant<-Surrogate_constant+coefficient_general*log(coefficient_out)
+                  }
+                }
+                
+                if(outer_function=="Logarithmic")
+                {
+                  if(internal_function$functions=="Exponential")
+                  {
+                    add_function<-list(coefficient=coefficient_in,parameter=internal_function$parameter,functions="Linear_combination")
+                    Surrogate_function_mid[[length(Surrogate_function_mid)+1]]<-add_function
+                    coefficients<-c(coefficients,coefficient_general)
+                    Surrogate_constant<-Surrogate_constant+coefficient_general*log(coefficient_out)
+                  }
+                }
+                
+                if(outer_function=="Exponential")
+                {
+                  if(internal_function$functions=="Logarithmic")
+                  {
+                    if(coefficient_out!=1)
+                    {
+                      add_function<-list(coefficient=c(coefficient_in,coefficient_out),parameter=internal_function$parameter,functions="Power")
+                      Surrogate_function_mid[[length(Surrogate_function_mid)+1]]<-add_function
+                      coefficients<-c(coefficients,coefficient_general)
+                    }
+                    if(coefficient_out==1)
+                    {
+                      add_function<-list(coefficient=c(coefficient_in),parameter=internal_function$parameter,functions="Linear_combination")
+                      Surrogate_function_mid[[length(Surrogate_function_mid)+1]]<-add_function
+                      coefficients<-c(coefficients,coefficient_general)
+                    }
+                  }
+                }
+              }
+            }
+          }
+          if(convexity_indicator==3)
+          {
+            update_parameter<-rep(1,length(Function_component$parameter))
+            update_parameter[Function_component$parameter<0]<-input[-Function_component$parameter[Function_component$parameter<0]]
+            update_parameter[Function_component$parameter>0]<-mid_value[Function_component$parameter[Function_component$parameter>0]]
+            linear_component<-update_parameter*Function_component$coefficient[1:length(update_parameter)]
+            linear_sum<-sum(linear_component)
+            
+            VV<-get(Function_component$functions)(coefficient = Function_component$coefficient,parameter = update_parameter)
+            Surrogate_constant<-Surrogate_constant+coefficients[1]*(VV+linear_sum/(1-linear_sum)*log(linear_sum))
+            
+            Surrogate_function_mid[[length(Surrogate_function_mid)+1]]<-list(coefficient=Function_component$coefficient,parameter=Function_component$parameter,functions="Logarithmic")
+            coefficients<-c(coefficients,-coefficients[1]*linear_sum/(1-linear_sum))
+          }
+        }
+        Surrogate_function_mid<-Surrogate_function_mid[-1]
+        coefficients<-coefficients[-1]
+        # print(length(Surrogate_function_mid))
+      }
+      
+      for(i in 1:Function_obj$dimension)
+      {
+        add_position<-length(Surrogate_function_final[[i]]$components)+1
+        Surrogate_function_final[[i]]$components[[add_position]]<-Surrogate_function_final_coefficient[[i]]
+      }
+      
+      
+      Surrogate_function_final$Constant<-Surrogate_constant
+      names(Surrogate_function_final)[1:Function_obj$dimension]<-paste0("Surrogate_",1:Function_obj$dimension)
+      return(Surrogate_function_final)
+    }
+  }
+}
+
+## MMAD
+{
+  MMAD<-function(Function_obj,init,tol=1e-4)
+  {
+    # init<-lambda
+    value_0<--Inf
+    argg_0<-init-1
+    argg_1<-init
+    value_1<-Function_evaluation(Function_obj,argg_1)$Value
+    
+    
+    
+    while((mean(abs(argg_1-argg_0))>tol)|(((value_1-value_0))>0))
+    {
+      value_0<-value_1
+      argg_0<-argg_1
+      # GH<-Gradient_and_Hessian_value(Function_obj,argg)
+      Surrogate_function<-Function_minorization(Function_obj,argg_1)
+      
+      Surrogate_all<-list(Value=Surrogate_function$Constant,Gradient=rep(0,Function_obj$dimension),Hessian=rep(0,Function_obj$dimension))
+      for(i in 1:Function_obj$dimension)
+      {
+        GH_i<-Function_evaluation(Surrogate_function[[i]],argg_1[i])
+        Surrogate_all$Value<-Surrogate_all$Value+GH_i$Value
+        Surrogate_all$Gradient[i]<-Surrogate_all$Gradient[i]+GH_i$Gradient
+        Surrogate_all$Hessian[i]<-Surrogate_all$Hessian[i]+GH_i$Hessian
+      }
+      argg_1<-argg_1-Surrogate_all$Gradient/Surrogate_all$Hessian
+      value_1<-Function_evaluation(Function_obj,argg_1)$Value
+
+      # print(value_1)
+    }
+    
+    return(argg_1)
+  }
+}

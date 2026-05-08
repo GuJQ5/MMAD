@@ -1,0 +1,40 @@
+library(usethis)
+library(devtools)
+
+load_all()
+document()
+
+use_r("expr")
+# use_test("expr")
+# testthat::test_file("tests/testthat/test-expr.R")
+
+use_r("evaluate_expr")
+use_r("atoms")
+use_r("dcp")
+# use_test("dcp")
+# testthat::test_file("tests/testthat/test-dcp.R")
+
+use_r("minorize")
+# use_test("minorize")
+# testthat::test_file("tests/testthat/test-minorize.R")
+
+use_r("mmad_driver")
+# use_test("mmad_driver")
+# testthat::test_file("tests/testthat/test-mmad_driver.R")
+
+use_r("parse_formula")
+# use_test("formula")
+# use_test("mmad-formula")
+# testthat::test_file("tests/testthat/test-formula.R")
+# testthat::test_file("tests/testthat/test-mmad-formula.R")
+
+use_r("function_check")
+# use_test("function_check")
+# testthat::test_file("tests/testthat/test-function_check.R")
+
+test()
+check()
+
+
+check_win_devel()
+build()

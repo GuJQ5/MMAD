@@ -1,0 +1,25 @@
+source("All_function.R")
+Function_obj<-list()
+Function_obj$dimension<-2
+Function_obj$components<-list()
+Function_obj$components[[1]]<-list(coefficient=c(1/2,1/2),parameter= c(-1,-2),functions="Logarithmic")
+Function_obj$components[[2]]<-list(coefficient= c(2/3,1/3),parameter= c(-1,-2),functions="Logarithmic")
+Function_obj$components[[3]]<-list(coefficient= c(1/3,2/3),parameter=c(-1,-2),functions="Logarithmic")
+Function_obj$components[[4]]<-list(coefficient=c(12,15,9,-6,-6),parameter=c(1,2,3,-1,-2),functions="Linear_combination")
+
+Eval<-Function_evaluation(Function_obj,input=c(4,2))
+Surrogate_function<-Function_minorization(Function_obj,input=c(4,2))
+MMAD(Function_obj,init=c(4,2))
+solution<-MMAD(Function_obj,init=c(4,2))
+Function_evaluation(Function_obj,input=solution)
+
+input=c(4,2)
+Surrogate_all<-list(Value=Surrogate_function$Constant,Gradient=rep(0,Function_obj$dimension),Hessian=diag(0,Function_obj$dimension))
+for(i in 1:Function_obj$dimension)
+{
+  GH_i<-Function_evaluation(Surrogate_function[[i]],input[i])
+  Surrogate_all$Value<-Surrogate_all$Value+GH_i$Value
+  Surrogate_all$Gradient[i]<-Surrogate_all$Gradient[i]+GH_i$Gradient
+  Surrogate_all$Hessian[i,i]<-Surrogate_all$Hessian[i,i]+GH_i$Hessian
+}
+eigen(Eval$Hessian-Surrogate_all$Hessian)

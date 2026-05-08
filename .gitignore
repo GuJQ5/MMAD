@@ -4,3 +4,5 @@
 *.Rcheck/
 *.tar.gz
 .DS_Store
+.Rproj.user
+.positai

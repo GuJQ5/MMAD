@@ -8,6 +8,12 @@
 ##   grad S(theta_0 | theta_0) = grad expr(theta_0)
 ##   S(theta | theta_0)       <= expr(theta)   for all theta in the domain
 ##
+## Before the top-down walk, `minorize_at()` applies a bottom-up algebraic
+## pre-simplification pass (`simplify_expr()` in expr.R) that rewrites
+## log(exp(h)) -> h, exp(log(h)) -> h (when h > 0), and log(h^c) ->
+## c*log(h) (when h > 0). This ensures that the minorization rules below
+## see the structurally simplest equivalent expression.
+##
 ## Construction proceeds top-down through the additive structure of the
 ## target (descending through `add`, `neg`, `scale`) and applies four
 ## rules at each leaf, in priority order:
@@ -75,6 +81,12 @@ minorize_at <- function(expr, theta_0) {
   }
   theta_0 <- as.numeric(theta_0)
   p       <- length(theta_0)
+
+  # Pre-simplification pass: apply algebraic identities E3/E4/E5 bottom-up
+  # so that the minorization rules work on the structurally simplest
+  # equivalent expression (e.g. log(exp(h)) becomes h, log(h^c) becomes
+  # c*log(h)). This does not change the value or gradient of the expression.
+  expr <- simplify_expr(expr)
 
   state <- new.env(parent = emptyenv())
   state$constant      <- 0
@@ -172,14 +184,33 @@ process_term <- function(expr, coef, theta_0, p, state) {
       }
     }
     if (eff == "concave" && is.null(inner_aff)) {
-      # Nested Jensen: recursively minorize the (concave) inner into a
-      # separable lower bound, then apply Jensen to g(separable_LB).
+      # Nested Jensen: inner is concave, so we can recursively minorize it
+      # into a separable lower bound and apply Jensen to g(separable_LB).
       if (try_nested_jensen(expr$op, expr$params, inner,
                             coef, theta_0, p, state)) {
         return(invisible(NULL))
       }
+      # Additive Jensen (extended rule E1): inner is a flat additive sum of
+      # nonneg univariate/constant terms, e.g. log(1 + exp(theta_j)).
+      # dcp.R already classifies such expressions as "concave" via E1, so
+      # eff is correctly "concave" here; try_nested_jensen fails because
+      # the inner is convex, so we fall through to this rule.
+      if (try_additive_jensen(expr$op, expr$params, inner,
+                              coef, theta_0, p, state)) {
+        return(invisible(NULL))
+      }
     }
     if (eff == "convex") {
+      # For a convex composite whose inner is concave (extended rule E2,
+      # e.g. exp(log(t1)+log(t2))), try_hyperplane_concave_inner gives a
+      # tighter separable surrogate by linearising g and then minorizing h.
+      # Fall back to the full-expression hyperplane otherwise.
+      if (curvature(inner) == "concave") {
+        if (try_hyperplane_concave_inner(expr$op, expr$params, inner,
+                                         coef, theta_0, p, state)) {
+          return(invisible(NULL))
+        }
+      }
       apply_hyperplane(expr, coef, theta_0, p, state)
       return(invisible(NULL))
     }
@@ -354,6 +385,147 @@ apply_hyperplane <- function(expr, coef, theta_0, p, state) {
       add_to_coord(state, j, scale_expr(coef * G[j], mmad_var(j)))
     }
   }
+}
+
+# Additive-inner Jensen for `coef * g(inner)` where g is a concave
+# nondecreasing 1-arg atom and `inner` is an additive sum whose terms are
+# each a constant or a univariate (single-coordinate) sub-expression.
+# This handles patterns like log(1 + exp(theta_j)) that fail the DCP
+# composition rule (inner is convex, not affine) yet admit a clean
+# Jensen decomposition by treating each additive piece as a slot.
+#
+# Preconditions checked internally:
+#   - inner decomposes into a flat list of additive terms
+#   - every term is either theta-independent (constant slot) or
+#     depends on exactly one theta index (univariate slot)
+#   - every slot's value at theta_0 is strictly positive
+#
+# Returns TRUE on success, FALSE if any precondition fails.
+try_additive_jensen <- function(op, params, inner, coef, theta_0, p, state) {
+  # Collect the flat additive terms of inner.
+  terms <- collect_additive_terms(inner)
+  if (is.null(terms)) return(FALSE)
+
+  atom_value_fn <- mmad_atom(op)$value
+
+  # For each term, determine its value at theta_0 and whether it is
+  # univariate or constant.
+  n_terms   <- length(terms)
+  slot_vals <- numeric(n_terms)
+  slot_idx  <- integer(n_terms)    # 0 = constant, >0 = theta index
+
+  for (kk in seq_len(n_terms)) {
+    t_idx <- theta_indices(terms[[kk]])
+    if (length(t_idx) > 1L) return(FALSE)   # multi-coordinate piece
+    v <- evaluate_expr(terms[[kk]], theta_0)$value
+    if (!is.finite(v) || v <= 0) return(FALSE)   # must be strictly positive
+    slot_vals[kk] <- v
+    slot_idx[kk]  <- if (length(t_idx) == 0L) 0L else t_idx[1L]
+  }
+
+  S <- sum(slot_vals)
+  if (S <= 0) return(FALSE)
+
+  # Emit one Jensen term per slot.
+  for (kk in seq_len(n_terms)) {
+    w_k   <- slot_vals[kk] / S
+    if (w_k == 0) next
+    j     <- slot_idx[kk]
+    if (j == 0L) {
+      # Constant slot: contributes a numeric constant to the surrogate.
+      state$constant <- state$constant +
+        w_k * coef * atom_value_fn(c(S), params)
+    } else {
+      # Univariate slot in theta[j].
+      factor_in  <- S / slot_vals[kk]   # scale so that g(factor * s_j(theta_j))
+      inner_expr <- scale_expr(factor_in, terms[[kk]])
+      g_call     <- mmad_call(op, list(inner_expr), params)
+      add_to_coord(state, j, scale_expr(w_k * coef, g_call))
+    }
+  }
+  TRUE
+}
+
+# Flatten an mmad_expr into its additive terms (accounting for neg/scale
+# wrappers so that, e.g., a - b returns list(a, neg(b))).  Returns NULL
+# if the expression contains an additive term that is itself an `add`
+# node after unwrapping -- which shouldn't happen given the smart
+# constructor -- or if we detect a non-unary structure we don't handle.
+collect_additive_terms <- function(expr) {
+  if (inherits(expr, "mmad_call") && expr$op == "add") {
+    out <- list()
+    for (a in expr$args) {
+      sub <- collect_additive_terms(a)
+      if (is.null(sub)) return(NULL)
+      out <- c(out, sub)
+    }
+    return(out)
+  }
+  # A single non-add node is itself one term.
+  list(expr)
+}
+
+# Supporting-hyperplane-on-g + minorize-inner construction for
+# `coef * g(inner)` where g is a convex nondecreasing 1-arg atom and
+# `inner` is a concave multivariate sub-expression (DCP composition fails
+# because concave-inside-convex-nondecreasing is not a recognised DCP rule).
+#
+# Construction (two steps):
+#   1. Linearise g at u0 = h(theta_0) via its supporting hyperplane:
+#        g(u) >= g(u0) + g'(u0) * (u - u0)   for all u  (g convex)
+#      Substituting u = h(theta):
+#        g(h(theta)) >= g(u0) + g'(u0) * (h(theta) - u0)
+#   2. g'(u0) >= 0 because g is nondecreasing.  h(theta) is concave and
+#      multivariate, so minorize it recursively to a separable lower bound
+#      h_hat(theta) = c + sum_j s_j(theta_j) <= h(theta).  Substituting:
+#        g(h(theta)) >= g(u0) - g'(u0)*u0 + g'(u0)*h_hat(theta)
+#      which is separable (affine in each per-coord piece of h_hat).
+#
+# When coef < 0 the effective curvature of coef*g is concave and the
+# effective monotonicity flips to nonincreasing; in that case we instead
+# require g'(u0) <= 0, which holds because the effective sign of the
+# derivative is coef * g'(u0) and coef < 0 makes it nonpositive.  The
+# algebra is the same; only the sign of the coefficient of h_hat changes.
+#
+# Returns TRUE on success, FALSE if any precondition fails (the caller
+# then falls through to the non-separable bucket).
+try_hyperplane_concave_inner <- function(op, params, inner,
+                                         coef, theta_0, p, state) {
+  # Step 1: evaluate g and g' at u0 = h(theta_0).
+  inner_res <- evaluate_expr(inner, theta_0)
+  u0        <- inner_res$value
+  if (!is.finite(u0)) return(FALSE)
+
+  atom      <- mmad_atom(op)
+  g_u0      <- atom$value(c(u0), params)
+  g_prime   <- atom$grad(c(u0), params)[1L]   # scalar g'(u0)
+  if (!is.finite(g_u0) || !is.finite(g_prime)) return(FALSE)
+
+  # g'(u0) must be nonneg (nondecreasing atom, coef > 0) or nonpos
+  # (nonincreasing effective direction, coef < 0).  In either case
+  # coef * g'(u0) >= 0 is required so that the coefficient of h_hat
+  # in the surrogate is nonnegative and the inequality is preserved.
+  eff_deriv <- coef * g_prime
+  if (eff_deriv < 0) return(FALSE)   # would flip inequality when substituting h_hat
+
+  # Step 2: recursively minorize the concave inner h.
+  inner_surr <- minorize_at(inner, theta_0)
+  if (!inner_surr$is_separable) return(FALSE)
+
+  # Constant part of the surrogate:
+  #   coef * [g(u0) - g'(u0) * u0]  +  coef * g'(u0) * inner_surr$constant
+  state$constant <- state$constant +
+    coef * (g_u0 - g_prime * u0) +
+    eff_deriv * inner_surr$constant
+
+  # Per-coordinate parts: coef * g'(u0) * s_j(theta_j)
+  for (j in seq_len(p)) {
+    if (!is.null(inner_surr$per_coord[[j]])) {
+      add_to_coord(state, j,
+                   scale_expr(eff_deriv, inner_surr$per_coord[[j]]))
+    }
+  }
+  TRUE
 }
 
 # Recursive ("nested") Jensen for `coef * g(inner)` where g is a 1-arg

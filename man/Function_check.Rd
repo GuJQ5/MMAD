@@ -4,7 +4,7 @@
 \alias{Function_check}
 \title{Diagnose an \code{mmad_expr} (or formula) before optimization}
 \usage{
-Function_check(expr, init, data = NULL)
+Function_check(expr, init, data = NULL, tree = FALSE)
 }
 \arguments{
 \item{expr}{A formula or \code{mmad_expr} representing the target.}
@@ -13,12 +13,17 @@ Function_check(expr, init, data = NULL)
 
 \item{data}{Optional \code{list}/\code{data.frame} of theta-free symbols
 referenced in \code{expr} (only relevant when \code{expr} is a formula).}
+
+\item{tree}{Logical; if \code{TRUE}, \code{print()} will also render the full
+annotated expression tree showing the minorizability of every node.
+Defaults to \code{FALSE}.  The tree data is always built and stored in
+\verb{$expr_tree} regardless of this flag; the flag only affects printing.}
 }
 \value{
 A list with class \code{"mmad_check"} and components
-\code{target_curvature}, \code{target_sign}, \code{is_dcp}, \code{summands},
-\code{domain_ok}, \code{domain_message}, \code{is_separable},
-\code{non_separable_indices}.
+\code{target_curvature}, \code{target_sign}, \code{is_dcp}, \code{is_minorizable},
+\code{summands}, \code{domain_ok}, \code{domain_message}, \code{is_separable},
+\code{non_separable_indices}, \code{expr_tree}, \code{show_tree}.
 }
 \description{
 Runs curvature inference, top-level summand decomposition, domain
@@ -26,8 +31,20 @@ check at \code{init}, and a dry-run of \code{\link[=minorize_at]{minorize_at()}}
 structured report with a \code{print()} method intended as a quick health
 check before invoking \code{\link[=mmad]{mmad()}}.
 }
+\details{
+The \code{is_dcp} flag reflects strict DCP composition rules and may be
+\code{FALSE} even for expressions that are fully minorizable by MMAD's
+extended rules (e.g. \code{log(1 + exp(theta))} or
+\code{exp(log(theta1) + log(theta2))}). The operationally relevant
+criterion is \code{is_separable}: if that is \code{TRUE}, \code{\link[=mmad]{mmad()}} will
+optimise the expression successfully.
+
+The \code{print()} method renders a full expression tree in which every
+node is annotated with \verb{[curvature | sign | minorizable?]}.
+}
 \examples{
 chk <- Function_check(~ log(theta[1] + theta[2]) - theta[1],
                       init = c(1, 1))
 print(chk)
+print(chk, tree = TRUE)   # show the expression tree
 }

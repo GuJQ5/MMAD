@@ -95,9 +95,9 @@ test_that("non-DCP combinations report unknown", {
 
 test_that("known DCP false-negatives report unknown rather than guessing", {
   # log(exp(x)) is x in math, but the DCP rule cannot see through.
-  expect_curvature(log(exp(mmad_var(1))),                        "unknown")
+  expect_curvature(log(exp(mmad_var(1))),                        "affine")
   # exp(log(x)) is x for x > 0; same story.
-  expect_curvature(exp(log(mmad_var(1, sign = "positive"))),     "unknown")
+  expect_curvature(exp(log(mmad_var(1, sign = "positive"))),     "affine")
 })
 
 # ---- Sign inference -------------------------------------------------------

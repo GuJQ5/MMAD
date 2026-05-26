@@ -216,6 +216,97 @@ Math.mmad_expr <- function(x, ...) {
   )
 }
 
+# ---- Algebraic simplification pass ----------------------------------------
+#
+# simplify_expr() performs a single bottom-up pass over an mmad_expr and
+# applies the three algebraic identities that are also recognised by the DCP
+# extended composition rules (E3--E5 in dcp.R). The pass is used as a
+# pre-processing step inside minorize_at() so that the minorization engine
+# works on the structurally simplest equivalent expression.
+#
+# Rules applied (same conditions as dcp.R):
+#
+#   E3: log(exp(h))  -->  h
+#       Always valid (no domain restriction on h).
+#
+#   E4: exp(log(h))  -->  h
+#       Only when h is provably positive (sign "positive"); required for
+#       log(h) to be defined and for h^anything to be real.
+#
+#   E5: log(h^c)     -->  scale_expr(c, log(h))
+#       Only when h is provably positive (domain condition for both log and
+#       non-integer powers).
+#
+# The pass is applied recursively: children are simplified first, then the
+# parent rule is checked against the already-simplified children. This means
+# nested cancellations (e.g. log(exp(log(exp(h)))) -> h) are handled in one
+# call without requiring iteration.
+#
+# simplify_expr() is intentionally conservative: it only fires when the
+# domain conditions are provably satisfied (via infer_dcp sign inference).
+# Expressions where the domain cannot be verified are left unchanged.
+
+#' Algebraically simplify an `mmad_expr`
+#'
+#' Applies identities E3 (`log(exp(h)) = h`), E4 (`exp(log(h)) = h` when
+#' `h > 0`), and E5 (`log(h^c) = c * log(h)` when `h > 0`) in a single
+#' bottom-up pass. Used internally by [minorize_at()] before dispatching
+#' to the minorization rules.
+#'
+#' @param expr An `mmad_expr`.
+#' @return An `mmad_expr` that is algebraically equivalent to `expr`.
+#' @keywords internal
+#' @export
+simplify_expr <- function(expr) {
+  # Leaves are already fully simplified.
+  if (inherits(expr, "mmad_var") || inherits(expr, "mmad_const")) {
+    return(expr)
+  }
+
+  if (!inherits(expr, "mmad_call")) {
+    return(expr)   # unknown node type: pass through unchanged
+  }
+
+  # First simplify all children (bottom-up).
+  simplified_args <- lapply(expr$args, simplify_expr)
+  # Rebuild the node with simplified children.
+  node <- mmad_call(expr$op, simplified_args, expr$params)
+
+  # Now try to apply a rewrite rule at this node.
+  if (length(node$args) == 1L) {
+    inner <- node$args[[1L]]
+
+    # E3: log(exp(h)) = h
+    if (node$op == "log" &&
+        inherits(inner, "mmad_call") && inner$op == "exp") {
+      return(inner$args[[1L]])
+    }
+
+    # E4: exp(log(h)) = h  -- only when h is provably positive
+    if (node$op == "exp" &&
+        inherits(inner, "mmad_call") && inner$op == "log") {
+      h_sign <- infer_dcp(inner$args[[1L]])$sign
+      if (is_pos(h_sign)) {
+        return(inner$args[[1L]])
+      }
+    }
+
+    # E5: log(h^c) = c * log(h)  -- only when h is provably positive
+    if (node$op == "log" &&
+        inherits(inner, "mmad_call") && inner$op == "pow") {
+      h_sign <- infer_dcp(inner$args[[1L]])$sign
+      if (is_pos(h_sign)) {
+        cc      <- inner$params$c
+        log_h   <- mmad_call("log", list(inner$args[[1L]]))
+        return(scale_expr(cc, log_h))
+      }
+    }
+  }
+
+  # No rule fired: return the node with simplified children.
+  node
+}
+
 # ---- Pretty printing -------------------------------------------------------
 
 #' @export

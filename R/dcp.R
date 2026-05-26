@@ -15,6 +15,34 @@
 ## prove convex/concave/affine is reported as "unknown". The Phase 3
 ## minorization engine treats "unknown" as a hard error and points the
 ## user at the offending sub-expression.
+##
+## Extended composition rules (applied as a fallback after the standard
+## rule returns "unknown"):
+##
+## (E3) log(exp(h)) = h  (algebraic identity):
+##   Curvature and sign are those of h.  Checked before E1/E2 so the
+##   exact identity takes priority over the looser curvature bounds.
+##
+## (E4) exp(log(h)) = h  (algebraic identity, requires h > 0):
+##   Curvature and sign are those of h.  Checked before E1/E2.
+##
+## (E5) log(h^c) = c * log(h)  (logarithm power rule, requires h > 0):
+##   The result is an affine scaling of log(h), so its curvature is
+##   "concave" when c > 0, "convex" when c < 0, and "affine" when c = 0.
+##   Checked before E1/E2 to give the exact curvature rather than the
+##   looser bound E1 would produce.
+##
+## (E1) Concave+nondecreasing atom applied to a convex inner:
+##   If g is concave and nondecreasing, and the inner h is a flat additive
+##   sum of univariate/constant terms each with nonneg sign, then g(h) is
+##   "concave".  Justification: Jensen's inequality applies per additive
+##   slot (see try_additive_jensen in minorize.R).
+##
+## (E2) Convex+nondecreasing atom applied to a concave inner:
+##   If g is convex and nondecreasing, and the inner h is concave, then
+##   g(h) is "convex".  Justification: supporting hyperplane on g at
+##   h(theta_0) plus recursive minorization of the concave h
+##   (see try_hyperplane_concave_inner in minorize.R).
 
 # ---- Sign lattice helpers --------------------------------------------------
 # These helpers are also used inside atom dcp_info functions in atoms.R.
@@ -108,6 +136,105 @@ compose_curvature <- function(outer_curv, mono_per_arg, inner_curv) {
   "unknown"
 }
 
+# ---- Extended composition rules --------------------------------------------
+
+# Check whether every additive leaf of `expr` is either theta-independent
+# (constant) or depends on exactly one theta index (univariate), and that
+# every such leaf has a provably nonneg sign.  This is the structural
+# precondition for the extended rule E1 (additive Jensen).
+inner_is_nonneg_additive <- function(expr) {
+  leaves <- collect_additive_leaves(expr)
+  if (is.null(leaves)) return(FALSE)
+  all(vapply(leaves, function(leaf) {
+    s <- infer_dcp(leaf)$sign
+    is_nonneg(s)
+  }, logical(1)))
+}
+
+# Flatten an expression into its additive leaves (handling add/neg/scale).
+# Returns NULL if any leaf is itself a multi-argument call other than add.
+collect_additive_leaves <- function(expr) {
+  if (inherits(expr, "mmad_call") && expr$op == "add") {
+    out <- list()
+    for (a in expr$args) {
+      sub <- collect_additive_leaves(a)
+      if (is.null(sub)) return(NULL)
+      out <- c(out, sub)
+    }
+    return(out)
+  }
+  list(expr)
+}
+
+# Extended composition fallback. Called by infer_dcp when the standard
+# compose_curvature returns "unknown" for a 1-argument mmad_call.
+# Returns a list(curvature, sign) rather than just a curvature string,
+# because E3/E4 pass through the inner's sign exactly.
+extended_compose_curvature <- function(atom_op, atom_curv, atom_mono,
+                                       inner_curv, inner_sign, inner_expr) {
+  # E3: log(exp(h)) = h  -- exact algebraic identity.
+  # Curvature and sign are exactly those of h, regardless of h's shape.
+  if (atom_op == "log" &&
+      inherits(inner_expr, "mmad_call") && inner_expr$op == "exp") {
+    # The grandchild is the argument of exp, i.e. h in log(exp(h)).
+    grandchild <- infer_dcp(inner_expr$args[[1L]])
+    return(list(curvature = grandchild$curvature, sign = grandchild$sign))
+  }
+
+  # E4: exp(log(h)) = h  -- exact algebraic identity (requires h > 0).
+  # We only apply this when the inner log's argument is provably positive,
+  # which is the domain condition for log anyway.
+  if (atom_op == "exp" &&
+      inherits(inner_expr, "mmad_call") && inner_expr$op == "log") {
+    grandchild <- infer_dcp(inner_expr$args[[1L]])
+    # Only apply if the argument of log is provably positive (valid domain).
+    if (is_pos(grandchild$sign) || is_nonneg(grandchild$sign)) {
+      return(list(curvature = grandchild$curvature, sign = grandchild$sign))
+    }
+  }
+
+  # E5: log(h^c) = c * log(h)  -- logarithm power rule.
+  # Requires h > 0 (domain condition for log; also needed for h^c when
+  # c is non-integer).  The result c*log(h) has curvature sign(c)*concave.
+  if (atom_op == "log" &&
+      inherits(inner_expr, "mmad_call") && inner_expr$op == "pow") {
+    cc         <- inner_expr$params$c
+    grandchild <- infer_dcp(inner_expr$args[[1L]])
+    if (is_pos(grandchild$sign)) {
+      # Curvature of c * log(h): log(h) has curvature "concave"; scaling
+      # by c flips it when c < 0.
+      log_h_curv <- infer_dcp(
+        mmad_call("log", list(inner_expr$args[[1L]]))
+      )$curvature
+      result_curv <- if (cc == 0) {
+        "affine"
+      } else if (cc > 0) {
+        log_h_curv          # same curvature as log(h)
+      } else {
+        # cc < 0: flip concave <-> convex
+        if (log_h_curv == "concave") "convex"
+        else if (log_h_curv == "convex") "concave"
+        else log_h_curv     # affine or unknown pass through
+      }
+      return(list(curvature = result_curv, sign = "unknown"))
+    }
+  }
+
+  # E1: concave+nondecreasing of a nonneg additive-convex inner => concave.
+  if (atom_curv == "concave" && atom_mono == "nondecreasing" &&
+      inner_curv == "convex"  && inner_is_nonneg_additive(inner_expr)) {
+    return(list(curvature = "concave", sign = "unknown"))
+  }
+
+  # E2: convex+nondecreasing of a concave inner => convex.
+  if (atom_curv == "convex" && atom_mono == "nondecreasing" &&
+      inner_curv == "concave") {
+    return(list(curvature = "convex", sign = "unknown"))
+  }
+
+  list(curvature = "unknown", sign = "unknown")
+}
+
 # ---- Public API ------------------------------------------------------------
 
 #' Inferred curvature of an `mmad_expr`
@@ -183,6 +310,24 @@ infer_dcp <- function(expr) {
     }
 
     curv_composed <- compose_curvature(info$curvature, mono, inner_curv)
+
+    # If the standard rule cannot determine curvature and this is a
+    # 1-argument atom, try the extended rules (E3, E4, E1, E2).
+    if (curv_composed == "unknown" &&
+        length(expr$args) == 1L &&
+        length(mono) >= 1L) {
+      ext <- extended_compose_curvature(
+        atom_op    = expr$op,
+        atom_curv  = info$curvature,
+        atom_mono  = mono[1L],
+        inner_curv = inner_curv[1L],
+        inner_sign = inner_sign[1L],
+        inner_expr = expr$args[[1L]])
+      if (ext$curvature != "unknown") {
+        return(list(curvature = ext$curvature, sign = ext$sign))
+      }
+    }
+
     return(list(curvature = curv_composed, sign = info$sign))
   }
   stop("infer_dcp(): unrecognised mmad_expr node of class ",

@@ -1,6 +1,6 @@
 Package: MMAD
 Title: Minorization-Maximization via Assembly-Decomposition Technology
-Version: 3.0.0
+Version: 3.0.1
 Authors@R:
     c(person(given = "Xifen", family = "Huang", role = "aut", email = "xf_yellow@126.com"),
       person(given = "Jinfeng", family = "Xu",   role = "aut", email = "jinfenxu@cityu.edu.hk"),
@@ -20,9 +20,11 @@ Description: A formula-driven framework for maximizing target functions
 License: GPL-3
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
-RoxygenNote: 7.3.2
 Depends:
     R (>= 2.10)
+Imports:
+    stats
 Suggests:
     testthat (>= 3.0.0)
 Config/testthat/edition: 3
+Config/roxygen2/version: 8.1.0

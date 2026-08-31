@@ -31,6 +31,7 @@ the headline example and \code{\link[=Function_check]{Function_check()}} for a p
 
 Authors:
 \itemize{
+  \item Jiaqi Gu \email{jiaqigu@usf.edu}
   \item Xifen Huang \email{xf_yellow@126.com}
   \item Jinfeng Xu \email{jinfenxu@cityu.edu.hk}
 }

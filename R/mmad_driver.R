@@ -55,15 +55,26 @@
 #'   change). Default `FALSE`.
 #' @param verbose         If `TRUE`, print per-iteration diagnostics.
 #'
-#' @return A list with components
+#' @return An object of class `"mmad_fit"`: a list whose leading
+#'   components follow the conventions of the optimizers in base R
+#'   (cf. [stats::optim()] and [stats::nlminb()]):
 #'   \describe{
-#'     \item{`estimate`}{the final parameter vector (named if `init` was named)}
-#'     \item{`value`}{the target value at `estimate`}
+#'     \item{`par`}{the final parameter vector (named if `init` was named)}
+#'     \item{`value`}{the target value at `par`}
 #'     \item{`iterations`}{number of iterations actually run}
-#'     \item{`converged`}{`TRUE` iff both convergence criteria were met}
-#'     \item{`history`}{per-iteration diagnostics (data frame), or `NULL`}
+#'     \item{`convergence`}{integer code as in [stats::optim()]: `0`
+#'       indicates successful convergence, `1` indicates that `max_iter`
+#'       was reached, and `10` indicates that the line search could not
+#'       find an ascent direction before convergence}
 #'     \item{`message`}{character: short status string}
+#'     \item{`hessian`}{Hessian matrix of the target at `par`}
+#'     \item{`history`}{per-iteration diagnostics (data frame), or `NULL`}
 #'   }
+#'   For backward compatibility the list also carries the components
+#'   `estimate` (identical to `par`) and `converged` (`TRUE` iff
+#'   `convergence == 0`). Accessor methods [coef()], [vcov()],
+#'   [logLik()] and [confint()] are available (see [mmad_fit-methods]),
+#'   as well as Wald significance tests via [mmad_test()].
 #' @examples
 #' fit <- mmad(~ log(theta[1] + theta[2]) - theta[1] - theta[2] + 2,
 #'             init = c(2, 2))
@@ -199,16 +210,33 @@ mmad <- function(expr, init, data = NULL, tol = 1e-6, max_iter = 1000,
     message_str <- sprintf("max_iter (%d) reached without convergence", max_iter)
   }
 
-  if (!is.null(init_names)) names(theta) <- init_names
+  # Integer convergence code following the stats::optim() conventions:
+  # 0 = successful convergence, 1 = max_iter reached, 10 = the line
+  # search found no ascent direction before convergence.
+  convergence <- if (converged) 0L
+                 else if (grepl("^max_iter", message_str)) 1L
+                 else 10L
+
+  # Hessian of the target at the solution, as in optim(..., hessian = TRUE).
+  hess <- evaluate_expr(expr, theta)$hessian
+
+  if (!is.null(init_names)) {
+    names(theta)   <- init_names
+    dimnames(hess) <- list(init_names, init_names)
+  }
 
   structure(list(
-    estimate    = theta,
+    par         = theta,
     value       = val,
     iterations  = n_completed,
-    converged   = converged,
-    history     = if (track_history) do.call(rbind, history) else NULL,
+    convergence = convergence,
     message     = message_str,
-    expr        = expr
+    hessian     = hess,
+    history     = if (track_history) do.call(rbind, history) else NULL,
+    expr        = expr,
+    # Historical component names, kept for backward compatibility:
+    estimate    = theta,
+    converged   = converged
   ), class = c("mmad_fit", "list"))
 }
 
@@ -252,6 +280,151 @@ print.summary.mmad_fit <- function(x, ...) {
   cat("  Estimate:\n")
   print(x$estimate, ...)
   cat(sprintf("  History:       %s\n", x$history))
+  invisible(x)
+}
+
+# ---- Accessor methods for mmad_fit objects -------------------------------
+
+#' Extract information from an `mmad_fit` object
+#'
+#' Standard accessor methods for the fitted objects returned by [mmad()],
+#' in the spirit of the methods provided for `MASS::fitdistr()`:
+#' `coef()` returns the parameter vector at the optimum, `vcov()` returns
+#' the inverse of the negative Hessian of the target function at the
+#' optimum, and `logLik()` returns the final target value as a
+#' `"logLik"` object.
+#'
+#' `vcov()`, `logLik()` and `confint()` are statistically meaningful
+#' when the target function is a log-likelihood. In that case
+#' `sqrt(diag(vcov(object)))` gives the asymptotic standard errors of
+#' the parameter estimates, and `confint(object, level = 0.95)` gives
+#' the corresponding Wald confidence intervals at any user-specified
+#' confidence level. See also [mmad_test()] for Wald significance
+#' tests of the individual parameters.
+#'
+#' @param object An `mmad_fit` object returned by [mmad()].
+#' @param parm   A specification of which parameters are to be given
+#'   confidence intervals: a vector of numbers or a vector of names.
+#'   If missing, all parameters are considered.
+#' @param level  The confidence level required (default `0.95`).
+#' @param ...    Ignored.
+#'
+#' @return `coef()`: a (possibly named) numeric vector of parameter
+#'   estimates. `vcov()`: a numeric matrix, the inverse of the negative
+#'   Hessian of the target function at the estimates. `logLik()`: an
+#'   object of class `"logLik"` whose `df` attribute is the number of
+#'   parameters. `confint()`: a matrix with one row per parameter and
+#'   columns giving the lower and upper confidence limits at the
+#'   requested `level`.
+#'
+#' @examples
+#' fit <- mmad(~ 12 * log((theta[1] + theta[2] + 1) / 2) +
+#'               15 * log((2 * theta[1] + theta[2]) / 3) +
+#'               9  * log((theta[1] + 2 * theta[2]) / 3) -
+#'               6 * theta[1] - 6 * theta[2],
+#'             init = c(4, 2))
+#' coef(fit)
+#' vcov(fit)
+#' sqrt(diag(vcov(fit)))   # asymptotic standard errors
+#' logLik(fit)
+#' confint(fit)
+#' confint(fit, level = 0.90)
+#' @name mmad_fit-methods
+NULL
+
+#' @rdname mmad_fit-methods
+#' @export
+coef.mmad_fit <- function(object, ...) object$par
+
+#' @rdname mmad_fit-methods
+#' @export
+vcov.mmad_fit <- function(object, ...) {
+  solve(-object$hessian)
+}
+
+#' @rdname mmad_fit-methods
+#' @export
+logLik.mmad_fit <- function(object, ...) {
+  structure(object$value, df = length(object$par), class = "logLik")
+}
+
+#' @rdname mmad_fit-methods
+#' @export
+confint.mmad_fit <- function(object, parm, level = 0.95, ...) {
+  # Wald intervals coef(object) +/- qnorm((1 + level) / 2) * se, following
+  # the conventions of stats::confint.default() but with default labels
+  # ("theta1", "theta2", ...) when the parameter vector is unnamed.
+  cf     <- coef(object)
+  pnames <- names(cf)
+  if (is.null(pnames)) pnames <- paste0("theta", seq_along(cf))
+  if (missing(parm)) {
+    parm <- pnames
+  } else if (is.numeric(parm)) {
+    parm <- pnames[parm]
+  }
+  a   <- (1 - level) / 2
+  a   <- c(a, 1 - a)
+  pct <- paste(format(100 * a, trim = TRUE, scientific = FALSE, digits = 3),
+               "%")
+  fac <- stats::qnorm(a)
+  ses <- sqrt(diag(vcov(object)))
+  names(cf) <- names(ses) <- pnames
+  ci <- array(NA_real_, dim = c(length(parm), 2L),
+              dimnames = list(parm, pct))
+  ci[] <- cf[parm] + ses[parm] %o% fac
+  ci
+}
+
+#' Wald significance tests for the parameters of an `mmad_fit` object
+#'
+#' Performs a Wald z-test of the null hypothesis \eqn{H_0: \theta_j = 0}
+#' for each parameter of a fit returned by [mmad()]. The test statistic
+#' is the parameter estimate divided by its asymptotic standard error
+#' (the square root of the corresponding diagonal element of
+#' [vcov()][mmad_fit-methods]), and the two-sided p-value is computed
+#' from the standard normal distribution. The tests are statistically
+#' meaningful when the target function is a log-likelihood.
+#'
+#' @param object An `mmad_fit` object returned by [mmad()].
+#' @param ...    Ignored.
+#'
+#' @return A matrix of class `"mmad_test"` with one row per parameter
+#'   and columns `Estimate`, `Std. Error`, `z value` and `Pr(>|z|)`.
+#'   Its print method displays the table with significance stars via
+#'   [stats::printCoefmat()].
+#'
+#' @examples
+#' fit <- mmad(~ 12 * log((theta[1] + theta[2] + 1) / 2) +
+#'               15 * log((2 * theta[1] + theta[2]) / 3) +
+#'               9  * log((theta[1] + 2 * theta[2]) / 3) -
+#'               6 * theta[1] - 6 * theta[2],
+#'             init = c(4, 2))
+#' mmad_test(fit)
+#' @export
+mmad_test <- function(object, ...) {
+  if (!inherits(object, "mmad_fit")) {
+    stop("mmad_test(): object must be an mmad_fit returned by mmad().")
+  }
+  est <- coef(object)
+  se  <- sqrt(diag(vcov(object)))
+  z   <- est / se
+  p   <- 2 * stats::pnorm(-abs(z))
+  tab <- cbind(`Estimate`   = est,
+               `Std. Error` = se,
+               `z value`    = z,
+               `Pr(>|z|)`   = p)
+  if (is.null(names(est))) {
+    rownames(tab) <- paste0("theta", seq_along(est))
+  }
+  structure(tab, class = c("mmad_test", class(tab)))
+}
+
+#' @export
+print.mmad_test <- function(x, digits = max(3L, getOption("digits") - 3L),
+                            ...) {
+  cat("Wald tests of H0: parameter = 0\n\n")
+  stats::printCoefmat(unclass(x), digits = digits, P.values = TRUE,
+                      has.Pvalue = TRUE, ...)
   invisible(x)
 }
 

@@ -125,3 +125,118 @@ test_that("mmad() returns an mmad_fit object with print and summary methods", {
   expect_true(s$grad_norm < 1e-5)
   # expect_silent(print(s))
 })
+
+# ---- optim-style components (par / convergence / hessian) -----------------
+
+test_that("return object follows base-R optimizer conventions", {
+  v1 <- mmad_var(1); v2 <- mmad_var(2)
+  expr <- 12 * log(0.5 * v1 + 0.5 * v2) +
+          15 * log((2/3) * v1 + (1/3) * v2) +
+          9  * log((1/3) * v1 + (2/3) * v2) -
+          6 * v1 - 6 * v2
+
+  fit <- mmad(expr, init = c(4, 2), tol = 1e-6, max_iter = 2000)
+
+  # optim()-style components.
+  expect_true(all(c("par", "value", "convergence", "message", "hessian")
+                  %in% names(fit)))
+  expect_identical(fit$par, fit$estimate)      # backward-compatible alias
+  expect_identical(fit$convergence, 0L)        # 0 = success, as in optim()
+  expect_true(fit$converged)
+  expect_true(is.matrix(fit$hessian))
+  expect_equal(dim(fit$hessian), c(2L, 2L))
+  expect_equal(fit$hessian,
+               evaluate_expr(expr, as.numeric(fit$par))$hessian,
+               tolerance = 1e-12)
+
+  # Non-convergence maps to code 1 (max_iter), as in optim().
+  fit_cap <- mmad(log(0.5 * v1 + 0.5 * v2), init = c(1, 1),
+                  tol = 1e-12, max_iter = 3)
+  expect_identical(fit_cap$convergence, 1L)
+  expect_false(fit_cap$converged)
+})
+
+# ---- Accessor methods: coef / vcov / logLik / confint ---------------------
+
+test_that("coef, vcov, logLik and confint methods work on mmad_fit objects", {
+  v1 <- mmad_var(1); v2 <- mmad_var(2)
+  expr <- 12 * log(0.5 * v1 + 0.5 * v2) +
+          15 * log((2/3) * v1 + (1/3) * v2) +
+          9  * log((1/3) * v1 + (2/3) * v2) -
+          6 * v1 - 6 * v2
+
+  fit <- mmad(expr, init = c(theta1 = 4, theta0 = 2),
+              tol = 1e-6, max_iter = 2000)
+
+  # coef() returns the (named) estimate.
+  expect_identical(coef(fit), fit$par)
+  expect_equal(names(coef(fit)), c("theta1", "theta0"))
+
+  # vcov() is the inverse of the negative Hessian at the solution.
+  V <- vcov(fit)
+  expect_true(is.matrix(V))
+  expect_equal(V, solve(-fit$hessian), tolerance = 1e-12)
+  expect_equal(rownames(V), c("theta1", "theta0"))
+  expect_true(all(diag(V) > 0))                # concave at the optimum
+
+  # logLik() carries the final value and df = number of parameters.
+  ll <- logLik(fit)
+  expect_s3_class(ll, "logLik")
+  expect_equal(as.numeric(ll), fit$value)
+  expect_identical(attr(ll, "df"), 2L)
+
+  # confint() gives Wald intervals at any user-specified level.
+  ci <- confint(fit)
+  expect_equal(dim(ci), c(2L, 2L))
+  expect_true(all(ci[, 1] < coef(fit) & coef(fit) < ci[, 2]))
+  se <- sqrt(diag(vcov(fit)))
+  expect_equal(unname(ci[, 1]), unname(coef(fit) + qnorm(0.025) * se),
+               tolerance = 1e-10)
+  ci90 <- confint(fit, level = 0.90)
+  expect_equal(colnames(ci90), c("5 %", "95 %"))
+  expect_equal(unname(ci90[, 2]), unname(coef(fit) + qnorm(0.95) * se),
+               tolerance = 1e-10)
+  # Narrower level, narrower interval; parm selects parameters.
+  expect_true(all(ci90[, 2] - ci90[, 1] < ci[, 2] - ci[, 1]))
+  expect_equal(dim(confint(fit, parm = "theta1")), c(1L, 2L))
+})
+
+# ---- Wald significance tests: mmad_test -----------------------------------
+
+test_that("mmad_test performs Wald z-tests of H0: parameter = 0", {
+  v1 <- mmad_var(1); v2 <- mmad_var(2)
+  expr <- 12 * log(0.5 * v1 + 0.5 * v2) +
+          15 * log((2/3) * v1 + (1/3) * v2) +
+          9  * log((1/3) * v1 + (2/3) * v2) -
+          6 * v1 - 6 * v2
+
+  fit <- mmad(expr, init = c(theta1 = 4, theta0 = 2),
+              tol = 1e-6, max_iter = 2000)
+  tab <- mmad_test(fit)
+
+  expect_s3_class(tab, "mmad_test")
+  expect_equal(dim(tab), c(2L, 4L))
+  expect_equal(colnames(tab),
+               c("Estimate", "Std. Error", "z value", "Pr(>|z|)"))
+  expect_equal(rownames(tab), c("theta1", "theta0"))
+
+  # Columns are internally consistent: z = est / se, p = 2 * pnorm(-|z|).
+  expect_equal(unname(tab[, "Estimate"]), unname(coef(fit)),
+               tolerance = 1e-12)
+  expect_equal(unname(tab[, "Std. Error"]), unname(sqrt(diag(vcov(fit)))),
+               tolerance = 1e-12)
+  expect_equal(unname(tab[, "z value"]),
+               unname(tab[, "Estimate"] / tab[, "Std. Error"]),
+               tolerance = 1e-12)
+  expect_equal(unname(tab[, "Pr(>|z|)"]),
+               unname(2 * pnorm(-abs(tab[, "z value"]))),
+               tolerance = 1e-12)
+  expect_true(all(tab[, "Pr(>|z|)"] >= 0 & tab[, "Pr(>|z|)"] <= 1))
+
+  # Unnamed parameters get default row labels.
+  fit2 <- mmad(expr, init = c(4, 2), tol = 1e-6, max_iter = 2000)
+  expect_equal(rownames(mmad_test(fit2)), c("theta1", "theta2"))
+
+  # Only mmad_fit objects are accepted.
+  expect_error(mmad_test(list()), "mmad_fit")
+})

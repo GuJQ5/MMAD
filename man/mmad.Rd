@@ -46,15 +46,26 @@ change). Default \code{FALSE}.}
 \item{verbose}{If \code{TRUE}, print per-iteration diagnostics.}
 }
 \value{
-A list with components
+An object of class \code{"mmad_fit"}: a list whose leading
+components follow the conventions of the optimizers in base R
+(cf. \code{\link[stats:optim]{stats::optim()}} and \code{\link[stats:nlminb]{stats::nlminb()}}):
 \describe{
-\item{\code{estimate}}{the final parameter vector (named if \code{init} was named)}
-\item{\code{value}}{the target value at \code{estimate}}
+\item{\code{par}}{the final parameter vector (named if \code{init} was named)}
+\item{\code{value}}{the target value at \code{par}}
 \item{\code{iterations}}{number of iterations actually run}
-\item{\code{converged}}{\code{TRUE} iff both convergence criteria were met}
-\item{\code{history}}{per-iteration diagnostics (data frame), or \code{NULL}}
+\item{\code{convergence}}{integer code as in \code{\link[stats:optim]{stats::optim()}}: \code{0}
+indicates successful convergence, \code{1} indicates that \code{max_iter}
+was reached, and \code{10} indicates that the line search could not
+find an ascent direction before convergence}
 \item{\code{message}}{character: short status string}
+\item{\code{hessian}}{Hessian matrix of the target at \code{par}}
+\item{\code{history}}{per-iteration diagnostics (data frame), or \code{NULL}}
 }
+For backward compatibility the list also carries the components
+\code{estimate} (identical to \code{par}) and \code{converged} (\code{TRUE} iff
+\code{convergence == 0}). Accessor methods \code{\link[=coef]{coef()}}, \code{\link[=vcov]{vcov()}},
+\code{\link[=logLik]{logLik()}} and \code{\link[=confint]{confint()}} are available (see \link{mmad_fit-methods}),
+as well as Wald significance tests via \code{\link[=mmad_test]{mmad_test()}}.
 }
 \description{
 Given a target expression \code{expr} and an initial parameter vector

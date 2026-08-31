@@ -17,5 +17,6 @@
 #' statistical likelihoods can be written in one line. See [mmad()] for
 #' the headline example and [Function_check()] for a pre-flight diagnostic.
 #'
+#' @importFrom stats coef vcov
 #' @keywords internal
 "_PACKAGE"
